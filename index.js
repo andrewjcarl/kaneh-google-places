@@ -40,7 +40,7 @@ async function getPlaceId(searchString) {
             }
         }
         
-        if (res.data.status === 'OK') {
+        if (res.data.status === 'OK' && res.data.candidates.length > 0) {
             return {
                 search_err: false,
                 search_status: res.data.status,
@@ -78,7 +78,7 @@ async function getPlaceDetails(placeId) {
         return {
             details_err: null,
             details_status: res.data.status,
-            details_data: res.data
+            details_data: res.data.result
         };
     });
 }
@@ -169,7 +169,7 @@ class Place {
                 continue;
             }
 
-            place.setGoogleProps(details_data.result);
+            place.setGoogleProps(details_data);
             output.push(place);
         }
 
