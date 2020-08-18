@@ -4,7 +4,7 @@ I had a client who provided me with an excel sheet of 200 vendors with only a bu
 
 ## Example Use
 
-Load a CSV file with the first column a business name, and a second column a zip code
+Load a CSV file with the first column as a business name, and the second column the business zip code.
 
 ```
 node index.js --csv input.csv --key {your google places api key} --out output.csv
