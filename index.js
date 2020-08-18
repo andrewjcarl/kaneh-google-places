@@ -28,7 +28,31 @@ async function getPlaceId(searchString) {
             inputtype: 'textquery'
         }
     }).then((res) => {
-        return res.data.candidates[0].place_id;
+
+        if (res.data.status === 'ZERO_RESULTS' || 
+            res.data.status === 'INVALID_REQUEST' || 
+            res.data.candidates.length === 0) {
+
+            return {
+                search_err: true,
+                search_status: res.data.status,
+                place_id: null
+            }
+        }
+        
+        if (res.data.status === 'OK') {
+            return {
+                search_err: false,
+                search_status: res.data.status,
+                place_id: res.data.candidates[0].place_id
+            }
+        }
+
+        return {
+            search_err: true, 
+            search_status: res.data.status,
+            place_id: null
+        };
     });
 }
 
@@ -43,8 +67,19 @@ async function getPlaceDetails(placeId) {
             place_id: placeId
         }
     }).then((res) => {
-        console.log(JSON.stringify(res.data));
-        return res.data;
+        if (res.data.status !== 'OK') {
+            return {
+                details_err: true,
+                details_status: res.data.status,
+                details_data: null
+            }
+        }
+
+        return {
+            details_err: null,
+            details_status: res.data.status,
+            details_data: res.data
+        };
     });
 }
 
@@ -52,15 +87,16 @@ async function getPlaceDetails(placeId) {
  * Place Object to contain Google data
  */
 class Place {
-    name;
-    zip;
-    formatted_address;
-    formatted_phone_number;
-    formatted_name;
-    lat;
-    lng;
-    open_hours;
-    maps_url;
+    name = '';
+    zip = '';
+    formatted_address = '';
+    formatted_phone_number = '';
+    formatted_name = ''
+    lat = 0;
+    lng = 0;
+    open_hours = '';
+    maps_url = '';
+    status = '';
     error = false;
 
     constructor(name, zip) {
@@ -68,33 +104,44 @@ class Place {
         this.zip = zip;
     }
 
-    setGoogleProps(obj) {
-        this.formatted_address      = obj.formatted_address || '';
-        this.formatted_phone_number = obj.formatted_phone_number || '';
-        this.formatted_name         = obj.name || '';
-        this.lat                    = obj.geometry.location.lat || 0;
-        this.lng                    = obj.geometry.location.lng || 0;
-        this.open_hours             = obj.opening_hours.weekday_text.join(', ') || '';
-        this.maps_url               = obj.url || '';
+    safeSet(prop, def, transform) {
+        if (typeof prop === 'undefined' || prop === null) {
+            return def;
+        } else if (typeof transform === 'function') {
+            return transform(prop);
+        } else {
+            return prop;
+        }
     }
 
-    notFound() {
+    setGoogleProps(obj) {
+        this.formatted_address      = this.safeSet(obj.formatted_address, '');
+        this.formatted_phone_number = this.safeSet(obj.formatted_phone_number, '');
+        this.formatted_name         = this.safeSet(obj.name, '');
+        this.lat                    = this.safeSet(obj.geometry.location.lat, 0);
+        this.lng                    = this.safeSet(obj.geometry.location.lng, 0);
+        this.maps_url               = this.safeSet(obj.url, '');
+
+        if (obj.hasOwnProperty('opening_hours') && obj.opening_hours.hasOwnProperty('weekday_text')) {
+            this.open_hours = this.safeSet(obj.opening_hours.weekday_text, '', (arr) => {return arr.length > 0 ? arr.join(', ') : arr});
+        }
+    }
+
+    notFound(status) {
+        this.status = status;
         this.error = true;
     }
 }
 
 (async () => {
     try {
-        let file    = await fs.readFile(INPUT_CSV);
-        let csvData = await csv.parse(file);
-        let output  = [];
+        let file     = await fs.readFile(INPUT_CSV);
+        let fileData = await csv.parse(file);
+        let output   = [];
 
-        csvData = csvData.slice(1); // remove the header line
+        fileData = fileData.slice(1); // remove the header line
         
-        let placeArr = [csvData[0]];
-        for (const location of placeArr) {
-
-            let googleDetails;
+        for (const location of fileData) {
 
             let name = location[0];
             let zip  = location[1];
@@ -104,18 +151,25 @@ class Place {
 
             console.log(`Searching for ${searchString}...`);
 
-            let placeId = await getPlaceId(searchString);
+            let {search_err, search_status, place_id} = await getPlaceId(searchString);
 
-            if (placeId) {
-                googleDetails = await getPlaceDetails(placeId);
+            if (search_err) {
+                place.notFound(search_status);
+                output.push(place);
+                continue;
             }
 
-            if (googleDetails && googleDetails.status === 'OK') {
-                place.setGoogleProps(googleDetails.result)
-            } else {
-                place.notFound();
+            console.log(`Place found at ${place_id}...`);
+
+            let {details_err, details_status, details_data} = await getPlaceDetails(place_id);
+
+            if (details_err) {
+                place.notFound(details_status);
+                output.push(place);
+                continue;
             }
 
+            place.setGoogleProps(details_data.result);
             output.push(place);
         }
 
@@ -147,6 +201,9 @@ class Place {
             label: 'Google URL',
             value: 'maps_url'
         }, {
+            label: 'Search Status',
+            value: 'status'
+        }, {
             label: 'Search Error',
             value: 'error'
         }];
@@ -162,4 +219,5 @@ class Place {
         console.error(err);
         return;
     }
+
 })();
