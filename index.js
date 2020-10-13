@@ -4,136 +4,29 @@ const { Client, Status }  = require("@googlemaps/google-maps-services-js");
 const { Parser }          = require('json2csv');
 const csv                 = require('async-csv');
 const fs                  = require('fs').promises;
+const Place               = require('./Place');
+const Service             = require('./Service');
 
 const argv = require('yargs')
-    .usage('Usage: $0 -csv [input] -key [api key] -out [filename]')
+    .usage('Usage: $0 --csv [input] --key [api key] --out [filename]')
     .demandOption(['csv','key', 'out'])
+    .boolean(['runonce', 'logging'])
+    .default('runonce', false)
+    .default('logging', false)
     .argv;
-
-const client = new Client({});
 
 const API_KEY   = argv.key;
 const INPUT_CSV = argv.csv;
 const OUT_CSV   = argv.out;
+const RUN_ONCE  = argv.runonce;
+const LOGGING   = argv.logging;
 
-/**
- * Get Google Place ID from Search String
- * @param {String} searchString 
- */
-async function getPlaceId(searchString) {
-    return client.findPlaceFromText({
-        params: {
-            key: API_KEY,
-            input: searchString,
-            inputtype: 'textquery'
-        }
-    }).then((res) => {
-
-        if (res.data.status === 'ZERO_RESULTS' || 
-            res.data.status === 'INVALID_REQUEST' || 
-            res.data.candidates.length === 0) {
-
-            return {
-                search_err: true,
-                search_status: res.data.status,
-                place_id: null
-            }
-        }
-        
-        if (res.data.status === 'OK' && res.data.candidates.length > 0) {
-            return {
-                search_err: false,
-                search_status: res.data.status,
-                place_id: res.data.candidates[0].place_id
-            }
-        }
-
-        return {
-            search_err: true, 
-            search_status: res.data.status,
-            place_id: null
-        };
-    });
-}
-
-/**
- * Get Google Place Details from Place ID 
- * @param {String} placeId 
- */
-async function getPlaceDetails(placeId) {
-    return client.placeDetails({
-        params: {
-            key: API_KEY,
-            place_id: placeId
-        }
-    }).then((res) => {
-        if (res.data.status !== 'OK') {
-            return {
-                details_err: true,
-                details_status: res.data.status,
-                details_data: null
-            }
-        }
-
-        return {
-            details_err: null,
-            details_status: res.data.status,
-            details_data: res.data.result
-        };
-    });
-}
-
-/**
- * Place Object to contain Google data
- */
-class Place {
-    name = '';
-    zip = '';
-    formatted_address = '';
-    formatted_phone_number = '';
-    formatted_name = ''
-    lat = 0;
-    lng = 0;
-    open_hours = '';
-    maps_url = '';
-    status = '';
-    error = false;
-
-    constructor(name, zip) {
-        this.name = name;
-        this.zip = zip;
-    }
-
-    safeSet(prop, def, transform) {
-        if (typeof prop === 'undefined' || prop === null) {
-            return def;
-        } else if (typeof transform === 'function') {
-            return transform(prop);
-        } else {
-            return prop;
-        }
-    }
-
-    setGoogleProps(obj) {
-        this.formatted_address      = this.safeSet(obj.formatted_address, '');
-        this.formatted_phone_number = this.safeSet(obj.formatted_phone_number, '');
-        this.formatted_name         = this.safeSet(obj.name, '');
-        this.lat                    = this.safeSet(obj.geometry.location.lat, 0);
-        this.lng                    = this.safeSet(obj.geometry.location.lng, 0);
-        this.maps_url               = this.safeSet(obj.url, '');
-
-        if (obj.hasOwnProperty('opening_hours') && obj.opening_hours.hasOwnProperty('weekday_text')) {
-            this.open_hours = this.safeSet(obj.opening_hours.weekday_text, '', (arr) => {return arr.length > 0 ? arr.join(', ') : arr});
-        }
-    }
-
-    notFound(status) {
-        this.status = status;
-        this.error = true;
-    }
-}
+console.log(argv._);
 
 (async () => {
+
+    const service = new Service(API_KEY);
+
     try {
         let file     = await fs.readFile(INPUT_CSV);
         let fileData = await csv.parse(file);
@@ -151,7 +44,7 @@ class Place {
 
             console.log(`Searching for ${searchString}...`);
 
-            let {search_err, search_status, place_id} = await getPlaceId(searchString);
+            let {search_err, search_status, place_id} = await service.getPlaceId(searchString);
 
             if (search_err) {
                 place.notFound(search_status);
@@ -161,7 +54,7 @@ class Place {
 
             console.log(`Place found at ${place_id}...`);
 
-            let {details_err, details_status, details_data} = await getPlaceDetails(place_id);
+            let {details_err, details_status, details_data} = await service.getPlaceDetails(place_id);
 
             if (details_err) {
                 place.notFound(details_status);
@@ -169,8 +62,19 @@ class Place {
                 continue;
             }
 
+            if (LOGGING) {
+                console.log('Logging Google place result... \n.\n.\n.\n.');
+                console.log(JSON.stringify(details_data));
+                console.log('\n.\n.\n.\n.');
+            }
+
             place.setGoogleProps(details_data);
+            place.setAddressProps(details_data);
             output.push(place);
+
+            if (RUN_ONCE) {
+                break;
+            } 
         }
 
         const fields = [{
@@ -182,24 +86,51 @@ class Place {
         }, {
             label: 'Formatted Address',
             value: 'formatted_address'
+        }, { 
+            label: 'address_1',
+            value: 'address_1'
+        }, { 
+            label: 'address_2',
+            value: 'address_2'
+        }, { 
+            label: 'address_3',
+            value: 'address_3'
+        }, { 
+            label: 'city',
+            value: 'city'
+        }, { 
+            label: 'state',
+            value: 'state'
+        }, { 
+            label: 'country',
+            value: 'country'
+        }, { 
+            label: 'postal_code',
+            value: 'postal_code'
         }, {
-            label: 'Formatted Phone Number',
+            label: 'phone_number',
             value: 'formatted_phone_number'
         }, {
-            label: 'Formatted Name',
+            label: 'name',
             value: 'formatted_name'
         }, {
-            label: 'Latitude',
+            label: 'lat',
             value: 'lat'
         }, {
-            label: 'Longitude',
+            label: 'lng',
             value: 'lng'
         }, {
-            label: 'Open Hours',
+            label: 'open_hours',
             value: 'open_hours'
         }, {
-            label: 'Google URL',
+            label: 'maps_url',
             value: 'maps_url'
+        }, {
+            label: 'website',
+            value: 'website'
+        }, {
+            label: 'place_id',
+            value: 'place_id'
         }, {
             label: 'Search Status',
             value: 'status'
